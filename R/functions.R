@@ -10,9 +10,8 @@
 ##' @param kernel kernel function used in smoothing
 ##' @param robust whether to adjust for outliers
 ##' @return a functions f(x0) which takes x0 as argument and outputs y estimate at x0
-lpfit <- function(formula, data, grouped_by = NULL, bandwidth = NULL,
-                  significance = 0.05, degree = 1, kernel = gaussianK,
-                  robust = FALSE) {
+lpfit <- function(formula, data, bandwidth = NULL, significance = 0.05,
+                  degree = 1, kernel = gaussianK) {
   frame <- model.frame(formula, data)
   ## extract variables
   x <- frame[,2]
@@ -34,10 +33,8 @@ lpfit <- function(formula, data, grouped_by = NULL, bandwidth = NULL,
     mean((y - estimate) ^ 2)/(1 - trace(smoother_matrix) / n) ^ 2
   }
   if(is.null(bandwidth)) {
-    xrange <- diff(range(x))
-    start <- 1.1 * xrange / n
-    end <- xrange / 8
-    bandwidth <- .find_smoothing_parameter(gcv, start, end)
+    candidates <- .bandwidth_candidates(x)
+    bandwidth <- .find_smoothing_parameter(gcv, candidates)
   }
   ## result
   smoother_matrix <- t(vapply(x, smoother, numeric(n), bandwidth = bandwidth))
@@ -46,6 +43,7 @@ lpfit <- function(formula, data, grouped_by = NULL, bandwidth = NULL,
               formula = formula,
               estimate = estimate,
               bandwidth = bandwidth,
+              gcv = gcv(bandwidth),
               fn = function(x0) (smoother(x0, bandwidth) %*% y)[[1]])
   fit$error <- .error_rate(x, y, estimate, smoother_matrix)
   fit$significance <- cbind(lower = estimate - z * fit$error,
@@ -54,14 +52,46 @@ lpfit <- function(formula, data, grouped_by = NULL, bandwidth = NULL,
   fit
 }
 
+lpfit_group <- function(formula, data, grouped_by, bandwidth = NULL,
+                        significance = 0.05, degree = 1, kernel = gaussianK) {
+  ## extract variables
+  frame <- model.frame(formula, data)
+  x <- unique(frame[,2])
+  subjects <- levels(data[[grouped_by]])
+  ##  select bandwidth
+  gcv <- function(bandwidth) {
+    mean(vapply(subjects, function(subject) {
+      subject_data <- data[data[[grouped_by]] == subject,]
+      lpfit(formula, subject_data, bandwidth, degree = degree, kernel = kernel)$gcv
+    }, numeric(1)))
+  }
+  if(is.null(bandwidth)) {
+    candidates <- .bandwidth_candidates(x)
+    bandwidth <- .find_smoothing_parameter(gcv, candidates)
+  }
+  ## result
+  fits <- lapply(subjects, function(subject) {
+    subject_data <- data[data[[grouped_by]] == subject,]
+    fit <- lpfit(formula, subject_data, significance = significance, degree = degree,
+                 kernel = kernel, bandwidth = bandwidth[1])
+    list(subject = subject, fit = fit)
+  })
+  fit <- list(fits = fits, bandwidth = bandwidth)
+  class(fit) <- "smooth_function_group"
+  fit
+}
+
 .error_rate <- function(x, y, estimate, smoother_matrix) {
-  n <- length(x)
-  sig <- sum((y - estimate) ^ 2) / (n - trace(smoother_matrix))
+  sig <- sum((y - estimate) ^ 2) / (length(x) - trace(smoother_matrix))
   sqrt(sig * diag(smoother_matrix %*% t(smoother_matrix)))
 }
 
-.find_smoothing_parameter <- function(gcv_fn, start, end, steps = 15) {
-  candidates <- logspace(start, end, steps)
+.bandwidth_candidates <- function(x, n = 15) {
+  xrange <- diff(range(x))
+  logspace(1.1 * xrange / length(x), xrange / 8, n)
+}
+
+.find_smoothing_parameter <- function(gcv_fn, candidates) {
   gcv <- vapply(candidates, gcv_fn, numeric(1))
   param <- candidates[which.min(gcv)]
   attr(param, "candidates") <- list(param = candidates, gcv = gcv)

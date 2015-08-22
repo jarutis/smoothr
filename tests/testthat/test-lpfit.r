@@ -28,3 +28,7 @@ test_that("lpfit() error is calculated correctly", {
   expect_equal(result$error, error, tolerance=0.001)
 })
 
+test_that("lpfit() selects good bandwidth", {
+  result_group <- lpfit_group(progesterone ~ day, progesterone, "cycle", degree=1)
+  expect_equal(result_group$bandwidth[1], 1.404, tolerance=0.001)
+})
